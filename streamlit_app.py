@@ -1,151 +1,148 @@
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+from PyPDF2 import PdfReader
+from langchain.docstore.document import Document
+from langchain.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain.chains.summarize import load_summarize_chain
+from docx import Document as DocxDocument
+from docx.shared import Pt
+import re
+import os
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+st.title("Legal Case Summary Generator")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+api_key = st.text_input("Enter your OpenAI API Key", type="password")
+st.caption("Your API key should start with 'sk-' and will not be stored")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+summarize_button = st.button("Summarize")
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+if summarize_button and uploaded_files and api_key:
+    if not api_key.startswith("sk-"):
+        st.error("Invalid API key format. OpenAI API keys should start with 'sk-'")
+    else:
+        try:
+            llm = ChatOpenAI(
+                openai_api_key=api_key,
+                model_name="gpt-4o-2024-08-06",
+                temperature=0.2,
+                top_p=0.2
+            )
+            
+            map_prompt = PromptTemplate(
+                input_variables=["text"],
+                template="""Analyze the following legal case document and extract:
+                
+                1. The case name and citation
+                2. Parties Involved (names of complainant/appellant and respondent)
+                3. Issues before the Court (precise summary of what happened in the case in 5 lines)
+                4. Observation/ Decision of the Court (precisely the important rulings or conclusions in 5 lines)
+                
+                Format your response exactly as:
+                
+                **[Case Name and Citation]**
+                · **Parties Involved:** [Names]
+                · **Issues before the Court:** [Summary of events]
+                · **Observation/ Decision of the Court:** [Summary of findings]
+                
+                Here is the text to analyze:
+                
+                {text}
+                """
+            )
+            
+            combine_prompt = PromptTemplate(
+                input_variables=["text"],
+                template="""Create a consolidated overview of the following legal case summaries. 
+                
+                Each summary for a document should start with the document name (without extensions like .pdf or .docx). List each case summary in order.
+                Keep the exact formatting from the individual summaries, using bullet points with the "·" character.
+                
+                {text}
+                """
+            )
+            
+            doc = DocxDocument()
+            
+            with st.spinner("Processing documents..."):
+                all_summaries = []
+                
+                for uploaded_file in uploaded_files:
+                    file_progress = st.empty()
+                    file_progress.text(f"Processing {uploaded_file.name}...")
+                    
+                    pdf = PdfReader(uploaded_file)
+                    text = ''
+                    for page in pdf.pages:
+                        content = page.extract_text()
+                        if content:
+                            text += content + "\n"
+                            
+                    if text.strip():
+                        docs = [Document(page_content=text)]
+                        map_reduce_chain = load_summarize_chain(
+                            llm,
+                            chain_type="map_reduce",
+                            map_prompt=map_prompt,
+                            combine_prompt=combine_prompt
+                        )
+                        
+                        output_summary = map_reduce_chain.invoke(docs)
+                        summary = output_summary['output_text']
+                        all_summaries.append(summary)
+                        
+                        st.write(summary)
+                        
+                    file_progress.text(f"Completed {uploaded_file.name}")
+                
+                if all_summaries:
+                    st.write("### Consolidated Overview Summary")
+                    
+                    heading = doc.add_paragraph()
+                    heading_run = heading.add_run("Consolidated Overview Summary")
+                    heading_run.bold = True
+                    heading_run.font.size = Pt(16)
+                    
+                    for summary in all_summaries:
+                        case_title_match = re.search(r'\*\*(.*?)\*\*', summary)
+                        if case_title_match:
+                            case_title = case_title_match.group(1)
+                            case_heading = doc.add_paragraph()
+                            case_run = case_heading.add_run(case_title)
+                            case_run.bold = True
+                            case_run.font.size = Pt(14)
+                            bullet_sections = re.findall(r'·\s+\*\*(.*?):\*\*\s+(.*?)(?=(?:·\s+\*\*|$))', summary, re.DOTALL)
+                            for section_title, section_content in bullet_sections:
+                                bullet_para = doc.add_paragraph()
+                                bullet_para.add_run('· ').font.size = Pt(11)
+                                title_run = bullet_para.add_run(f"{section_title}: ")
+                                title_run.bold = True
+                                title_run.font.size = Pt(11)
+                                content_run = bullet_para.add_run(section_content.strip())
+                                content_run.font.size = Pt(11)
+                        
+                        st.write(summary)
+                        st.write("---")
+                
+            doc_output_path = "legal_case_summaries.docx"
+            doc.save(doc_output_path)
+            
+            with open(doc_output_path, "rb") as doc_file:
+                st.download_button(
+                    "Download Summaries DOCX",
+                    doc_file,
+                    file_name="legal_case_summaries.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+                
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+            st.info("Please check that your API key is correct and that you have access to the selected model.")
+elif summarize_button and (not uploaded_files or not api_key):
+    if not uploaded_files:
+        st.warning("Please upload PDF files before summarizing.")
+    if not api_key:
+        st.warning("Please enter your OpenAI API key before summarizing.")
+else:
+    st.info("Upload PDF files, enter your OpenAI API key, and click 'Summarize' to process documents.")
