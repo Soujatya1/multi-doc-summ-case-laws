@@ -9,11 +9,6 @@ from docx.shared import Pt
 import re
 import os
 
-# Import PII masking dependencies
-from presidio_analyzer import AnalyzerEngine
-from presidio_anonymizer import AnonymizerEngine
-from presidio_anonymizer.entities import OperatorConfig
-
 st.title("Legal Case Summary Generator")
 
 api_key = st.text_input("Enter your OpenAI API Key", type="password")
@@ -21,36 +16,7 @@ st.caption("Your API key should start with 'sk-' and will not be stored")
 
 uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
 
-# Add PII masking option
-enable_pii_masking = st.checkbox("Enable PII Masking (will preserve PERSON, DATE_TIME, and MONEY entities)")
-
 summarize_button = st.button("Summarize")
-
-# Initialize PII masking engines
-analyzer = AnalyzerEngine()
-anonymizer = AnonymizerEngine()
-
-def mask_pii(text):
-    """
-    Mask PII in text while preserving PERSON, DATE_TIME, and MONEY entities
-    """
-    results = analyzer.analyze(text=text, language='en')
-    # Filter out PERSON, DATE_TIME, and MONEY entities to preserve them
-    allowed_entities = [r for r in results if r.entity_type not in ("PERSON", "DATE_TIME", "MONEY")]
-    
-    # Create operators config for masking
-    operators = {
-        result.entity_type: OperatorConfig("replace", {"new_value": "[PII_MASKED]"})
-        for result in allowed_entities
-    }
-    
-    anonymized_result = anonymizer.anonymize(
-        text=text,
-        analyzer_results=allowed_entities,
-        operators=operators
-    )
-    
-    return anonymized_result.text
 
 if summarize_button and uploaded_files and api_key:
     if not api_key.startswith("sk-"):
@@ -112,11 +78,6 @@ if summarize_button and uploaded_files and api_key:
                         content = page.extract_text()
                         if content:
                             text += content + "\n"
-                    
-                    # Apply PII masking if enabled
-                    if enable_pii_masking and text.strip():
-                        file_progress.text(f"Masking PII in {uploaded_file.name}...")
-                        text = mask_pii(text)
                             
                     if text.strip():
                         docs = [Document(page_content=text)]
