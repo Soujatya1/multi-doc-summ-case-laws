@@ -9,4 +9,7 @@ pypdf
 python-docx
 transformers
 langdetect
-presidio-analyzer presidio-anonymizer spacy && python -m spacy download en_core_web_lg
+presidio-analyzer
+presidio-anonymizer
+spacy
+python -m spacy download en_core_web_lg
