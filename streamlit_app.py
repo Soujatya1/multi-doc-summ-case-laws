@@ -38,6 +38,7 @@ if summarize_button and uploaded_files and api_key:
                 2. Parties Involved (names of complainant/appellant and respondent)
                 3. Issues before the Court (precise summary of what happened in the case in 5 lines)
                 4. Observation/ Decision of the Court (precisely the important rulings or conclusions in 5 lines)
+                5. Links
                 
                 Format your response exactly as:
                 
@@ -45,6 +46,7 @@ if summarize_button and uploaded_files and api_key:
                 · **Parties Involved:** [Names]
                 · **Issues before the Court:** [Summary of events]
                 · **Observation/ Decision of the Court:** [Summary of findings]
+                - **Links:** [links from the documents]
                 
                 Here is the text to analyze:
                 
